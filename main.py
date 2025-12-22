@@ -13,8 +13,10 @@ WB Price Optimizer - ОКОНЧАТЕЛЬНАЯ ВЕРСИЯ
 
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi import Request
 from pydantic import BaseModel
 from typing import Optional, Dict, List
 import json
@@ -46,9 +48,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Статические файлы
+# Статические файлы и шаблоны
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
+
+templates = Jinja2Templates(directory="templates")
 
 # === КОНФИГУРАЦИЯ ===
 WB_API_KEY = os.getenv("WB_API_KEY", "")
@@ -58,22 +62,6 @@ MPSTAT_TOKEN = os.getenv("MPSTAT_TOKEN", "")
 MPSTAT_BASE = "https://mpstats.io/api"
 
 KNOWLEDGE_BASE_PATH = os.getenv("KNOWLEDGE_BASE_PATH", "category_knowledge_base.json")
-ML_MODEL_PATH = os.getenv("ML_MODEL_PATH", "ml_model.pkl")
-
-# Инициализация ML модели
-ML_MODEL_AVAILABLE = False
-ml_engine = None
-
-try:
-    from ml_grouping_engine import MLGroupingEngine
-    ml_engine = MLGroupingEngine()
-    if os.path.exists(ML_MODEL_PATH):
-        ml_engine.load_model(ML_MODEL_PATH)
-        ML_MODEL_AVAILABLE = True
-        logger.info(f"✅ ML модель загружена: {ML_MODEL_PATH}")
-except Exception as e:
-    logger.warning(f"⚠️ ML модель недоступна: {e}")
-    ML_MODEL_AVAILABLE = False
 
 # Загрузка базы знаний
 try:
@@ -516,8 +504,15 @@ def generate_recommendation(
 
 # === API ENDPOINTS ===
 
-@app.get("/")
-async def root():
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    """Главная страница с веб-интерфейсом"""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/api")
+async def api_info():
+    """API информация (JSON)"""
     return {
         "status": "healthy",
         "service": "WB Price Optimizer v2.0",
@@ -542,12 +537,14 @@ async def root():
 async def health_check():
     """Проверка здоровья системы"""
     return {
-        "status": "healthy",
-        "ml_enabled": ML_MODEL_AVAILABLE,
-        "kb_loaded": len(KNOWLEDGE_BASE.get('product_database', {})) > 0,
-        "products_count": KNOWLEDGE_BASE.get('statistics', {}).get('total_products', 0),
-        "wb_api_configured": bool(WB_API_KEY),
-        "mpstat_api_configured": bool(MPSTAT_TOKEN)
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "wb_api": "configured" if WB_API_KEY else "not configured",
+        "mpstat_api": "configured" if MPSTAT_TOKEN else "not configured",
+        "knowledge_base": {
+            "loaded": len(KNOWLEDGE_BASE.get('product_database', {})) > 0,
+            "products": KNOWLEDGE_BASE.get('statistics', {}).get('total_products', 0)
+        }
     }
 
 
@@ -804,8 +801,7 @@ async def category_statistics():
     return {
         "statistics": stats,
         "total_products": KNOWLEDGE_BASE.get('statistics', {}).get('total_products', 0),
-        "total_groups": KNOWLEDGE_BASE.get('statistics', {}).get('total_groups', 0),
-        "total_categories": KNOWLEDGE_BASE.get('statistics', {}).get('total_categories', 0)
+        "total_groups": KNOWLEDGE_BASE.get('statistics', {}).get('total_groups', 0)
     }
 
 
