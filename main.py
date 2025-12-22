@@ -88,26 +88,22 @@ except FileNotFoundError:
         'statistics': {'total_products': 0, 'total_groups': 0}
     }
 
-# Загрузка ML модели (optional)
-ml_engine = None
-if ML_MODEL_AVAILABLE:
-    try:
-        if Path(ML_MODEL_PATH).exists():
-            ml_engine = MLGroupingEngine()
-            ml_engine.load_model(ML_MODEL_PATH)
-            logger.info(f"✅ ML модель загружена: {ML_MODEL_PATH}")
-        else:
-            logger.info("⚠️  ML модель не найдена, используется стандартная группировка")
-    except Exception as e:
-        logger.warning(f"⚠️  Ошибка загрузки ML: {e}")
+# Загрузка базы знаний
+try:
+    with open(KNOWLEDGE_BASE_PATH, 'r', encoding='utf-8') as f:
+        KNOWLEDGE_BASE = json.load(f)
+    logger.info(f"✅ База знаний загружена: {KNOWLEDGE_BASE['statistics']['total_products']} товаров")
+except FileNotFoundError:
+    logger.warning("⚠️  База знаний не найдена, используется пустая")
+    KNOWLEDGE_BASE = {
+        'category_mapping': {},
+        'product_database': {},
+        'statistics': {'total_products': 0, 'total_groups': 0}
+    }
 
 # In-memory хранилище
 products_db = {}  # {nm_id: product_data}
 
-
-# === MODELS ===
-
-class Product(BaseModel):
     nm_id: int
     name: str
     category: str
