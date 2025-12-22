@@ -58,7 +58,8 @@ MPSTAT_TOKEN = os.getenv("MPSTAT_TOKEN", "")
 MPSTAT_BASE = "https://mpstats.io/api"
 
 KNOWLEDGE_BASE_PATH = os.getenv("KNOWLEDGE_BASE_PATH", "category_knowledge_base.json")
-ML_MODEL_PATH = os.getenv("ML_MODEL_PATH", "ml_model.pkl") 
+ML_MODEL_PATH = os.getenv("ML_MODEL_PATH", "ml_model.pkl")
+
 # Инициализация ML модели
 ML_MODEL_AVAILABLE = False
 ml_engine = None
@@ -73,20 +74,6 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ ML модель недоступна: {e}")
     ML_MODEL_AVAILABLE = False
-
-
-# Загрузка базы знаний
-try:
-    with open(KNOWLEDGE_BASE_PATH, 'r', encoding='utf-8') as f:
-        KNOWLEDGE_BASE = json.load(f)
-    logger.info(f"✅ База знаний загружена: {KNOWLEDGE_BASE['statistics']['total_products']} товаров")
-except FileNotFoundError:
-    logger.warning("⚠️  База знаний не найдена, используется пустая")
-    KNOWLEDGE_BASE = {
-        'category_mapping': {},
-        'product_database': {},
-        'statistics': {'total_products': 0, 'total_groups': 0}
-    }
 
 # Загрузка базы знаний
 try:
@@ -104,6 +91,10 @@ except FileNotFoundError:
 # In-memory хранилище
 products_db = {}  # {nm_id: product_data}
 
+
+# === MODELS ===
+
+class Product(BaseModel):
     nm_id: int
     name: str
     category: str
@@ -551,14 +542,12 @@ async def root():
 async def health_check():
     """Проверка здоровья системы"""
     return {
-        "status": "ok",
-        "timestamp": datetime.now().isoformat(),
-        "wb_api": "configured" if WB_API_KEY else "not configured",
-        "mpstat_api": "configured" if MPSTAT_TOKEN else "not configured",
-        "knowledge_base": {
-            "loaded": len(KNOWLEDGE_BASE.get('product_database', {})) > 0,
-            "products": KNOWLEDGE_BASE.get('statistics', {}).get('total_products', 0)
-        }
+        "status": "healthy",
+        "ml_enabled": ML_MODEL_AVAILABLE,
+        "kb_loaded": len(KNOWLEDGE_BASE.get('product_database', {})) > 0,
+        "products_count": KNOWLEDGE_BASE.get('statistics', {}).get('total_products', 0),
+        "wb_api_configured": bool(WB_API_KEY),
+        "mpstat_api_configured": bool(MPSTAT_TOKEN)
     }
 
 
@@ -815,7 +804,8 @@ async def category_statistics():
     return {
         "statistics": stats,
         "total_products": KNOWLEDGE_BASE.get('statistics', {}).get('total_products', 0),
-        "total_groups": KNOWLEDGE_BASE.get('statistics', {}).get('total_groups', 0)
+        "total_groups": KNOWLEDGE_BASE.get('statistics', {}).get('total_groups', 0),
+        "total_categories": KNOWLEDGE_BASE.get('statistics', {}).get('total_categories', 0)
     }
 
 
