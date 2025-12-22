@@ -1,179 +1,366 @@
-// WB Price Optimizer - Frontend (Bootstrap Compatible)
-const API_BASE_URL = window.location.origin;
-const state = {products: [], currentProduct: null, competitorData: null, optimizationResult: null};
+// WB Price Optimizer V2.0 - Client Application
 
-document.addEventListener('DOMContentLoaded', () => {
-    console.log('🚀 WB Price Optimizer initialized');
-    loadDashboard();
-    checkHealth();
-});
-
-function showSection(sectionName) {
-    const sections = ['dashboard', 'products', 'competitors', 'optimization'];
-    sections.forEach(s => {
-        const section = document.getElementById(`${s}-section`);
-        if (section) section.style.display = 'none';
-    });
-    const targetSection = document.getElementById(`${sectionName}-section`);
-    if (targetSection) {
-        targetSection.style.display = 'block';
-        if (sectionName === 'dashboard') loadDashboard();
-        if (sectionName === 'products') loadProducts();
+class PriceOptimizerApp {
+    constructor() {
+        this.apiBase = window.location.origin;
+        this.init();
     }
-}
 
-async function loadDashboard() {
-    console.log('📊 Loading dashboard...');
-    try {
-        const response = await fetch(`${API_BASE_URL}/products/`);
-        if (!response.ok) throw new Error('Failed to load products');
-        const products = await response.json();
-        state.products = products;
-        updateDashboardStats(products);
-    } catch (error) {
-        console.error('❌ Dashboard error:', error);
+    init() {
+        // Загрузка статистики при старте
+        this.loadStats();
+        
+        // Обработчики событий
+        document.getElementById('analyzeBtn').addEventListener('click', () => this.analyze());
+        document.getElementById('exportExcelBtn').addEventListener('click', () => this.exportExcel());
+        
+        // Enter для поиска
+        document.getElementById('nmIdInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.analyze();
+        });
     }
-}
 
-function updateDashboardStats(products) {
-    const totalProducts = products.length;
-    const totalEl = document.getElementById('total-products');
-    if (totalEl) totalEl.textContent = totalProducts;
-    const apiStatus = document.getElementById('api-status');
-    if (apiStatus) apiStatus.innerHTML = '<span class="badge bg-success">Активен</span>';
-}
+    // Загрузка статистики
+    async loadStats() {
+        try {
+            const response = await fetch(`${this.apiBase}/categories/stats`);
+            const data = await response.json();
+            
+            document.getElementById('totalProducts').textContent = 
+                this.formatNumber(data.total_products || 0);
+            document.getElementById('totalCategories').textContent = 
+                this.formatNumber(data.total_categories || 0);
+            document.getElementById('totalGroups').textContent = 
+                this.formatNumber(data.total_groups || 0);
+        } catch (error) {
+            console.error('Ошибка загрузки статистики:', error);
+        }
+    }
 
-async function loadProducts() {
-    console.log('📦 Loading products...');
-    const productsList = document.getElementById('products-list');
-    if (!productsList) return;
-    productsList.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div></div>';
-    try {
-        const response = await fetch(`${API_BASE_URL}/products/`);
-        if (!response.ok) throw new Error('Failed to load products');
-        const products = await response.json();
-        state.products = products;
-        if (products.length === 0) {
-            productsList.innerHTML = '<div class="text-center py-5"><h3>📦 Список пуст</h3></div>';
+    // Анализ товара
+    async analyze() {
+        const nmId = document.getElementById('nmIdInput').value.trim();
+        
+        if (!nmId) {
+            this.showError('Пожалуйста, введите артикул WB');
             return;
         }
-        productsList.innerHTML = `<table class="table table-hover"><thead><tr><th>Артикул</th><th>Название</th><th>Цена</th><th>Себестоимость</th><th>Маржа</th></tr></thead><tbody>${products.map(p => {
-            const margin = ((p.current_price - p.cost) / p.current_price * 100).toFixed(1);
-            const badgeClass = margin > 30 ? 'success' : margin > 15 ? 'warning' : 'danger';
-            return `<tr><td><strong>${p.nm_id}</strong></td><td>${p.name || 'Без названия'}</td><td><strong>${p.current_price} ₽</strong></td><td>${p.cost} ₽</td><td><span class="badge bg-${badgeClass}">${margin}%</span></td></tr>`;
-        }).join('')}</tbody></table>`;
-    } catch (error) {
-        console.error('❌ Products error:', error);
-        productsList.innerHTML = '<div class="alert alert-danger">Ошибка загрузки</div>';
-    }
-}
 
-async function addProduct(event) {
-    event.preventDefault();
-    const productData = {
-        nm_id: parseInt(document.getElementById('product-nm-id').value),
-        name: document.getElementById('product-name').value,
-        category: document.getElementById('product-category').value,
-        current_price: parseFloat(document.getElementById('product-price').value),
-        cost: parseFloat(document.getElementById('product-cost').value)
-    };
-    console.log('➕ Adding product:', productData);
-    try {
-        const response = await fetch(`${API_BASE_URL}/products/add`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(productData)
-        });
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to add product');
+        this.showLoading(true);
+        this.hideError();
+        this.hideResults();
+
+        try {
+            const response = await fetch(`${this.apiBase}/analyze/full/${nmId}`);
+            
+            if (!response.ok) {
+                throw new Error(`Ошибка анализа: ${response.status}`);
+            }
+
+            const data = await response.json();
+            this.displayResults(data);
+        } catch (error) {
+            this.showError(`Не удалось выполнить анализ: ${error.message}`);
+        } finally {
+            this.showLoading(false);
         }
-        const result = await response.json();
-        console.log('✅ Product added:', result);
-        const modal = bootstrap.Modal.getInstance(document.getElementById('addProductModal'));
-        if (modal) modal.hide();
-        event.target.reset();
-        await loadProducts();
-        showToast('Товар успешно добавлен!', 'success');
-    } catch (error) {
-        console.error('❌ Add product error:', error);
-        showToast(`Ошибка: ${error.message}`, 'danger');
     }
-}
 
-async function searchCompetitors(event) {
-    event.preventDefault();
-    const nmId = parseInt(document.getElementById('competitor-nm-id').value);
-    const minReviews = parseInt(document.getElementById('min-reviews').value) || 500;
-    console.log('🔍 Analyzing competitors:', {nmId, minReviews});
-    const resultsDiv = document.getElementById('competitors-results');
-    if (!resultsDiv) return;
-    resultsDiv.style.display = 'block';
-    resultsDiv.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div></div>';
-    try {
-        const response = await fetch(`${API_BASE_URL}/competitors/analyze`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({nm_id: nmId, min_reviews: minReviews})
-        });
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to analyze');
+    // Отображение результатов
+    displayResults(data) {
+        // Информация о товаре
+        this.displayProductInfo(data.product);
+        
+        // Оптимизация цены
+        this.displayPriceOptimization(data.optimization);
+        
+        // Эластичность
+        this.displayElasticity(data.elasticity);
+        
+        // Сезонность
+        this.displaySeasonality(data.seasonality);
+        
+        // Конкуренты
+        this.displayCompetitors(data.competitors);
+        
+        // Рекомендации
+        this.displayRecommendations(data.recommendations);
+        
+        // Показать результаты
+        this.showResults();
+    }
+
+    displayProductInfo(product) {
+        const html = `
+            <div class="product-info-grid">
+                <div class="info-item">
+                    <div class="info-label">Артикул WB</div>
+                    <div class="info-value">${product.nm_id}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Название</div>
+                    <div class="info-value">${this.truncate(product.name, 40)}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Категория</div>
+                    <div class="info-value">${product.category || 'Не указана'}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Текущая цена</div>
+                    <div class="info-value">${this.formatPrice(product.current_price)}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Себестоимость</div>
+                    <div class="info-value">${this.formatPrice(product.cost)}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Группа конкурентов</div>
+                    <div class="info-value">${product.group_id || 'Нет данных'}</div>
+                </div>
+            </div>
+        `;
+        document.getElementById('productInfo').innerHTML = html;
+    }
+
+    displayPriceOptimization(opt) {
+        const currentPrice = opt.current_price;
+        const optimalPrice = opt.optimal_price;
+        const competitorAvg = opt.competitor_avg_price;
+        const change = ((optimalPrice - currentPrice) / currentPrice * 100).toFixed(1);
+        const changeClass = change >= 0 ? 'positive' : 'negative';
+        const changeSign = change >= 0 ? '+' : '';
+
+        const html = `
+            <div class="price-comparison">
+                <div class="price-box price-box-current">
+                    <div class="price-label">Текущая цена</div>
+                    <div class="price-amount">${this.formatPrice(currentPrice)}</div>
+                </div>
+                <div class="price-box price-box-optimal">
+                    <div class="price-label">Оптимальная цена</div>
+                    <div class="price-amount">${this.formatPrice(optimalPrice)}</div>
+                    <div class="price-change ${changeClass}">
+                        ${changeSign}${change}% (${changeSign}${this.formatPrice(optimalPrice - currentPrice)})
+                    </div>
+                </div>
+                <div class="price-box price-box-competitor">
+                    <div class="price-label">Средняя у конкурентов</div>
+                    <div class="price-amount">${this.formatPrice(competitorAvg)}</div>
+                </div>
+            </div>
+            <div style="text-align: center; font-size: 16px; color: #666;">
+                <p><strong>Прогноз продаж:</strong> ${opt.predicted_sales || 'Нет данных'} шт/мес</p>
+                <p><strong>Прогноз выручки:</strong> ${this.formatPrice(opt.predicted_revenue || 0)}</p>
+                <p><strong>Ожидаемая прибыль:</strong> ${this.formatPrice(opt.predicted_profit || 0)}</p>
+            </div>
+        `;
+        document.getElementById('priceOptimization').innerHTML = html;
+    }
+
+    displayElasticity(elasticity) {
+        const html = `
+            <div class="elasticity-grid">
+                <div class="elasticity-item">
+                    <strong>Эластичность</strong>
+                    <span>${elasticity.elasticity?.toFixed(2) || 'N/A'}</span>
+                </div>
+                <div class="elasticity-item">
+                    <strong>Изменение цены</strong>
+                    <span>${elasticity.price_change_pct?.toFixed(1) || 0}%</span>
+                </div>
+                <div class="elasticity-item">
+                    <strong>Изменение спроса</strong>
+                    <span>${elasticity.demand_change_pct?.toFixed(1) || 0}%</span>
+                </div>
+                <div class="elasticity-item">
+                    <strong>Текущий спрос</strong>
+                    <span>${elasticity.current_demand || 0} шт/мес</span>
+                </div>
+            </div>
+            <div style="margin-top: 20px; padding: 15px; background: #f0f0f0; border-radius: 10px;">
+                <p style="font-size: 14px; color: #666;">
+                    <strong>Интерпретация:</strong> 
+                    ${this.interpretElasticity(elasticity.elasticity)}
+                </p>
+            </div>
+        `;
+        document.getElementById('elasticityAnalysis').innerHTML = html;
+    }
+
+    displaySeasonality(seasonality) {
+        const factor = seasonality.seasonality_factor || 1.0;
+        const trendText = this.getSeasonalityTrend(factor);
+        const adjustment = ((factor - 1) * 100).toFixed(1);
+        const adjustmentSign = adjustment >= 0 ? '+' : '';
+
+        const html = `
+            <div class="seasonality-info">
+                <p><strong>Сезонный коэффициент:</strong> ${factor.toFixed(2)} (${adjustmentSign}${adjustment}%)</p>
+                <p><strong>Тренд:</strong> ${trendText}</p>
+                <p><strong>Рекомендация:</strong> ${seasonality.recommendation || 'Нет данных о сезонности'}</p>
+                <p><strong>Источник данных:</strong> ${seasonality.data_source || 'Автоматический расчет'}</p>
+            </div>
+        `;
+        document.getElementById('seasonalityInfo').innerHTML = html;
+    }
+
+    displayCompetitors(competitors) {
+        if (!competitors || competitors.length === 0) {
+            document.getElementById('topCompetitors').innerHTML = 
+                '<p style="color: #999;">Конкуренты не найдены</p>';
+            return;
         }
-        const result = await response.json();
-        console.log('✅ Competitor analysis:', result);
-        renderCompetitorResults(result);
-    } catch (error) {
-        console.error('❌ Competitor error:', error);
-        resultsDiv.innerHTML = `<div class="alert alert-danger">Ошибка: ${error.message}</div>`;
-    }
-}
 
-function renderCompetitorResults(data) {
-    const resultsDiv = document.getElementById('competitors-results');
-    if (!resultsDiv) return;
-    if (!data.competitors || data.competitors.length === 0) {
-        resultsDiv.innerHTML = '<div class="alert alert-warning">Конкуренты не найдены</div>';
-        return;
-    }
-    const stats = data.market_stats;
-    const competitors = data.competitors;
-    resultsDiv.innerHTML = `<div class="card mb-4"><div class="card-header"><h5>📊 Статистика рынка</h5></div><div class="card-body"><div class="row text-center"><div class="col-md-3"><h3>${stats.total_competitors}</h3><p class="text-muted">Конкурентов</p></div><div class="col-md-3"><h3>${stats.average_price.toFixed(0)} ₽</h3><p class="text-muted">Средняя</p></div><div class="col-md-3"><h3>${stats.median_price.toFixed(0)} ₽</h3><p class="text-muted">Медиана</p></div><div class="col-md-3"><h3>${stats.min_price}-${stats.max_price} ₽</h3><p class="text-muted">Диапазон</p></div></div></div></div><div class="card"><div class="card-header"><h5>🏆 Топ конкурентов</h5></div><div class="card-body"><table class="table table-hover"><thead><tr><th>Артикул</th><th>Цена</th><th>Рейтинг</th><th>Отзывы</th><th>Продаж/день</th></tr></thead><tbody>${competitors.slice(0,10).map(c => `<tr><td><strong>${c.nm_id}</strong></td><td><strong>${c.price} ₽</strong></td><td>${c.rating.toFixed(1)} ⭐</td><td><span class="badge bg-info">${c.reviews}</span></td><td>${c.sales_per_day}</td></tr>`).join('')}</tbody></table></div></div><div class="alert alert-info mt-3"><strong>💡 Рекомендация:</strong> Оптимальная цена: ${stats.median_price.toFixed(0)} ₽</div>`;
-}
+        const rows = competitors.slice(0, 20).map((comp, index) => {
+            const rankClass = index < 3 ? 'top3' : '';
+            return `
+                <tr>
+                    <td><span class="rank-badge ${rankClass}">${index + 1}</span></td>
+                    <td>${comp.nm_id}</td>
+                    <td>${this.truncate(comp.name, 50)}</td>
+                    <td>${comp.category || 'N/A'}</td>
+                    <td>${this.formatPrice(comp.price)}</td>
+                    <td>${comp.brand || 'N/A'}</td>
+                    <td>${this.formatNumber(comp.sales || 0)}</td>
+                    <td>${this.formatNumber(comp.reviews || 0)}</td>
+                    <td>${comp.rating?.toFixed(1) || 'N/A'}</td>
+                </tr>
+            `;
+        }).join('');
 
-async function runOptimization(event) {
-    event.preventDefault();
-    const nmId = parseInt(document.getElementById('optimize-nm-id').value);
-    const optimizeFor = document.getElementById('optimize-for').value;
-    const considerCompetitors = document.getElementById('consider-competitors').value === 'true';
-    console.log('🎯 Optimizing:', {nmId, optimizeFor, considerCompetitors});
-    const resultsDiv = document.getElementById('optimization-results');
-    if (!resultsDiv) return;
-    resultsDiv.style.display = 'block';
-    resultsDiv.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-success"></div></div>';
-    try {
-        const response = await fetch(`${API_BASE_URL}/optimize/${nmId}`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({optimize_for: optimizeFor, consider_competitors: considerCompetitors})
-        });
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Optimization failed');
+        const html = `
+            <div class="competitors-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Артикул</th>
+                            <th>Название</th>
+                            <th>Категория</th>
+                            <th>Цена</th>
+                            <th>Бренд</th>
+                            <th>Продажи</th>
+                            <th>Отзывы</th>
+                            <th>Рейтинг</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                    </tbody>
+                </table>
+            </div>
+        `;
+        document.getElementById('topCompetitors').innerHTML = html;
+    }
+
+    displayRecommendations(recommendations) {
+        if (!recommendations || recommendations.length === 0) {
+            document.getElementById('recommendations').innerHTML = 
+                '<p style="color: #999;">Рекомендации недоступны</p>';
+            return;
         }
-        const result = await response.json();
-        console.log('✅ Optimization result:', result);
-        renderOptimizationResults(result);
-    } catch (error) {
-        console.error('❌ Optimization error:', error);
-        resultsDiv.innerHTML = `<div class="alert alert-danger">Ошибка: ${error.message}</div>`;
+
+        const items = recommendations.map(rec => 
+            `<li>💡 ${rec}</li>`
+        ).join('');
+
+        const html = `<ul class="recommendations-list">${items}</ul>`;
+        document.getElementById('recommendations').innerHTML = html;
+    }
+
+    // Экспорт в Excel
+    async exportExcel() {
+        this.showLoading(true);
+        this.hideError();
+
+        try {
+            const response = await fetch(`${this.apiBase}/export/excel`);
+            
+            if (!response.ok) {
+                throw new Error(`Ошибка экспорта: ${response.status}`);
+            }
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `price_optimization_${this.formatDate()}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+
+            alert('✅ Отчет успешно скачан!');
+        } catch (error) {
+            this.showError(`Не удалось экспортировать: ${error.message}`);
+        } finally {
+            this.showLoading(false);
+        }
+    }
+
+    // Вспомогательные функции
+    interpretElasticity(e) {
+        if (!e) return 'Нет данных';
+        const abs = Math.abs(e);
+        if (abs < 0.5) return 'Спрос неэластичный - цену можно повышать';
+        if (abs < 1.5) return 'Спрос умеренно эластичный - требуется осторожность';
+        return 'Спрос высоко эластичный - снижение цены увеличит продажи';
+    }
+
+    getSeasonalityTrend(factor) {
+        if (factor >= 1.15) return '🔥 Высокий спрос - можно повысить цену';
+        if (factor >= 1.05) return '📈 Рост спроса - благоприятное время';
+        if (factor >= 0.95) return '➡️ Стабильный спрос';
+        if (factor >= 0.85) return '📉 Снижение спроса - рассмотрите скидки';
+        return '❄️ Низкий спрос - возможно межсезонье';
+    }
+
+    formatPrice(price) {
+        return new Intl.NumberFormat('ru-RU', {
+            style: 'currency',
+            currency: 'RUB',
+            minimumFractionDigits: 0
+        }).format(price);
+    }
+
+    formatNumber(num) {
+        return new Intl.NumberFormat('ru-RU').format(num);
+    }
+
+    formatDate() {
+        const now = new Date();
+        return now.toISOString().split('T')[0];
+    }
+
+    truncate(str, len) {
+        if (!str) return 'N/A';
+        return str.length > len ? str.substring(0, len) + '...' : str;
+    }
+
+    showLoading(show) {
+        document.getElementById('loadingIndicator').style.display = show ? 'block' : 'none';
+    }
+
+    showError(message) {
+        const el = document.getElementById('errorMessage');
+        el.textContent = '❌ ' + message;
+        el.style.display = 'block';
+    }
+
+    hideError() {
+        document.getElementById('errorMessage').style.display = 'none';
+    }
+
+    showResults() {
+        document.getElementById('resultsContainer').style.display = 'block';
+    }
+
+    hideResults() {
+        document.getElementById('resultsContainer').style.display = 'none';
     }
 }
 
-function renderOptimizationResults(data) {
-    const resultsDiv = document.getElementById('optimization-results');
-    if (!resultsDiv) return;
-    const priceChange = ((data.optimal_price - data.current_price) / data.current_price * 100).toFixed(1);
-    const arrow = priceChange > 0 ? '↑' : '↓';
-    const badgeClass = priceChange > 0 ? 'success' : 'danger';
-    resultsDiv.innerHTML = `<div class="card border-success"><div class="card-header bg-success text-white"><h5>✨ Результаты оптимизации</h5></div><div class="card-body"><div class="row text-center mb-4"><div class="col-md-4"><h6 class="text-muted">Текущая</h6><h2>${data.current_price} ₽</h2></div><div class="col-md-4"><h6 class="text-muted">Оптимальная</h6><h2 class="text-success">${data.optimal_price} ₽</h2><span class="badge bg-${badgeClass}">${arrow}
+// Инициализация приложения
+document.addEventListener('DOMContentLoaded', () => {
+    new PriceOptimizerApp();
+});

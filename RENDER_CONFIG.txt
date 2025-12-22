@@ -1,0 +1,83 @@
+═══════════════════════════════════════════════════════════════════════
+🎯 RENDER DEPLOYMENT - КОПИРУЙТЕ ЭТИ НАСТРОЙКИ
+═══════════════════════════════════════════════════════════════════════
+
+📍 Откройте: https://dashboard.render.com
+📂 Выберите: wb-price-optimizer
+⚙️ Перейдите: Environment → Environment Variables
+
+═══════════════════════════════════════════════════════════════════════
+📋 СКОПИРУЙТЕ ТОЧНО ТАК, КАК НАПИСАНО:
+═══════════════════════════════════════════════════════════════════════
+
+Переменная 1:
+─────────────
+Key:   WB_API_KEY
+Value: eyJhbGciOiJFUzI1NiIsImtpZCI6IjIwMjUwOTA0djEiLCJ0eXAiOiJKV1QifQ.eyJhY2MiOjQsImVudCI6MSwiZXhwIjoxNzgxOTAxMDA2LCJmb3IiOiJhc2lkOmUzNzEyN2I1LWNhNTgtNDU5Yi05MWVhLTRlYzA1ODU3ZDBhNCIsImlkIjoiMDE5YjM1YmEtZmZiZS03Y2U2LWI4NTAtZTMzYWE4N2MwZWQwIiwiaWlkIjoyMDMwMDI2NSwib2lkIjoyNTYwOSwicyI6NzQyMiwic2lkIjoiZTI3ODcyMzMtMzQxNy01ZjZiLTg4N2QtYjVjNTE0NmVjNmU4IiwidCI6ZmFsc2UsInVpZCI6MjAzMDAyNjV9.sXVhc06l1xxfFV0YPh7mw0P3x2splzZVtZBRB0SjZLmo_DL2ebZqTfNGrzOuVGDlk5V_ndFeynZs_244eiuB2A
+
+
+Переменная 2:
+─────────────
+Key:   ML_MODEL_PATH
+Value: ml_model.pkl
+
+
+Переменная 3:
+─────────────
+Key:   KNOWLEDGE_BASE_PATH
+Value: category_knowledge_base.json
+
+
+Переменная 4:
+─────────────
+Key:   PORT
+Value: 10000
+
+
+═══════════════════════════════════════════════════════════════════════
+✅ ПОСЛЕ ДОБАВЛЕНИЯ ПЕРЕМЕННЫХ:
+═══════════════════════════════════════════════════════════════════════
+
+1. Нажмите "Save Changes"
+2. Перейдите в раздел "Manual Deploy"
+3. Нажмите "Clear build cache & deploy"
+4. Дождитесь завершения развёртывания (5-7 минут)
+
+═══════════════════════════════════════════════════════════════════════
+🔍 ПРОВЕРКА В ЛОГАХ:
+═══════════════════════════════════════════════════════════════════════
+
+После развёртывания в логах должно появиться:
+
+✅ ML модель загружена: ml_model.pkl
+✅ Обучено товаров: 15000
+✅ WB API ключ: настроен
+✅ База знаний: загружена (5425 товаров)
+
+═══════════════════════════════════════════════════════════════════════
+🎯 ФИНАЛЬНАЯ ПРОВЕРКА:
+═══════════════════════════════════════════════════════════════════════
+
+Откройте: https://wb-price-optimizer.onrender.com/health
+
+Ожидаемый ответ:
+{
+  "status": "healthy",
+  "version": "2.0.0",
+  "ml_enabled": true,        ← ДОЛЖНО БЫТЬ true!
+  "kb_loaded": true,
+  "products_count": 5425,
+  "wb_api_configured": true  ← ДОЛЖНО БЫТЬ true!
+}
+
+═══════════════════════════════════════════════════════════════════════
+🚀 ГОТОВО К ИСПОЛЬЗОВАНИЮ!
+═══════════════════════════════════════════════════════════════════════
+
+URL приложения: https://wb-price-optimizer.onrender.com
+
+Тестовый SKU для проверки: 156631671
+
+═══════════════════════════════════════════════════════════════════════
+📅 Срок действия API ключа: до 15 марта 2026
+═══════════════════════════════════════════════════════════════════════
