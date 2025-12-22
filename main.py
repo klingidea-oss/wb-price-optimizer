@@ -58,7 +58,22 @@ MPSTAT_TOKEN = os.getenv("MPSTAT_TOKEN", "")
 MPSTAT_BASE = "https://mpstats.io/api"
 
 KNOWLEDGE_BASE_PATH = os.getenv("KNOWLEDGE_BASE_PATH", "category_knowledge_base.json")
-ML_MODEL_PATH = os.getenv("ML_MODEL_PATH", "ml_model.pkl")
+ML_MODEL_PATH = os.getenv("ML_MODEL_PATH", "ml_model.pkl") 
+# Инициализация ML модели
+ML_MODEL_AVAILABLE = False
+ml_engine = None
+
+try:
+    from ml_grouping_engine import MLGroupingEngine
+    ml_engine = MLGroupingEngine()
+    if os.path.exists(ML_MODEL_PATH):
+        ml_engine.load_model(ML_MODEL_PATH)
+        ML_MODEL_AVAILABLE = True
+        logger.info(f"✅ ML модель загружена: {ML_MODEL_PATH}")
+except Exception as e:
+    logger.warning(f"⚠️ ML модель недоступна: {e}")
+    ML_MODEL_AVAILABLE = False
+
 
 # Загрузка базы знаний
 try:
