@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WB Price Optimizer V2.0</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎯 WB Price Optimizer V2.0</h1>
+            <p class="subtitle">Оптимизация цен на основе эластичности спроса и конкурентного анализа</p>
+        </header>
+
+        <div class="main-content">
+            <!-- Панель управления -->
+            <div class="control-panel">
+                <div class="search-section">
+                    <input type="text" id="nmIdInput" placeholder="Введите артикул WB (nm_id)" />
+                    <button id="analyzeBtn" class="btn btn-primary">🔍 Анализировать</button>
+                    <button id="exportExcelBtn" class="btn btn-success">📊 Экспорт в Excel</button>
+                </div>
+
+                <div class="stats-section">
+                    <div class="stat-card">
+                        <div class="stat-label">Всего товаров</div>
+                        <div class="stat-value" id="totalProducts">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Категорий</div>
+                        <div class="stat-value" id="totalCategories">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Групп конкурентов</div>
+                        <div class="stat-value" id="totalGroups">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Результаты анализа -->
+            <div id="resultsContainer" class="results-container" style="display:none;">
+                <!-- Основная информация о товаре -->
+                <div class="product-card">
+                    <h2>📦 Информация о товаре</h2>
+                    <div id="productInfo"></div>
+                </div>
+
+                <!-- Оптимальная цена -->
+                <div class="price-optimization-card">
+                    <h2>💎 Оптимизация цены</h2>
+                    <div id="priceOptimization"></div>
+                </div>
+
+                <!-- Анализ эластичности -->
+                <div class="elasticity-card">
+                    <h2>📈 Анализ эластичности спроса</h2>
+                    <div id="elasticityAnalysis"></div>
+                </div>
+
+                <!-- Сезонность -->
+                <div class="seasonality-card">
+                    <h2>🌡️ Сезонность и тренды</h2>
+                    <div id="seasonalityInfo"></div>
+                </div>
+
+                <!-- ТОП конкуренты -->
+                <div class="competitors-card">
+                    <h2>🏆 ТОП-20 конкурентов по продажам</h2>
+                    <div id="topCompetitors"></div>
+                </div>
+
+                <!-- Рекомендации -->
+                <div class="recommendations-card">
+                    <h2>💡 Рекомендации</h2>
+                    <div id="recommendations"></div>
+                </div>
+            </div>
+
+            <!-- Загрузка -->
+            <div id="loadingIndicator" class="loading-indicator" style="display:none;">
+                <div class="spinner"></div>
+                <p>Анализируем данные...</p>
+            </div>
+
+            <!-- Ошибка -->
+            <div id="errorMessage" class="error-message" style="display:none;"></div>
+        </div>
+
+        <footer>
+            <p>© 2024 WB Price Optimizer V2.0 | Powered by Demand Elasticity & Category Analysis</p>
+        </footer>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
