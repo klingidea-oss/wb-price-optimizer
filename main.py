@@ -224,6 +224,44 @@ def calculate_demand_elasticity(sales_history: List[Dict]) -> float:
 
 # === РАБОТА С БАЗОЙ ЗНАНИЙ ===
 
+def get_current_wb_price(nm_id: int) -> Optional[float]:
+    """
+    Получает АКТУАЛЬНУЮ цену со скидкой напрямую с WB API
+    Использует публичный API для получения данных о товаре
+    """
+    try:
+        # Публичный API WB для получения информации о товаре
+        # Определяем корзину (basket) по артикулу
+        vol = str(nm_id)[:4]  # Первые 4 цифры
+        part = str(nm_id)[:6]  # Первые 6 цифр
+        
+        # URL для получения данных о товаре
+        url = f"https://card.wb.ru/cards/v1/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={nm_id}"
+        
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            products = data.get('data', {}).get('products', [])
+            
+            if products and len(products) > 0:
+                product = products[0]
+                
+                # Цена со скидкой (salePriceU в копейках, делим на 100)
+                sale_price = product.get('salePriceU', 0) / 100
+                
+                if sale_price > 0:
+                    logger.info(f"WB API: Артикул {nm_id}, актуальная цена: {sale_price} ₽")
+                    return sale_price
+        
+        logger.warning(f"WB API: Не удалось получить цену для {nm_id}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"WB API ошибка для {nm_id}: {e}")
+        return None
+
+
 def get_product_category_info(nm_id: int) -> Optional[Dict]:
     """Получает информацию о товаре из базы знаний"""
     nm_id_str = str(nm_id)
@@ -251,18 +289,23 @@ def get_top_selling_competitors(nm_id: int, category: str, limit: int = 20) -> L
             info['category'] == target_category and
             int(nm_id_str) != nm_id):
             
-            # Получаем статистику продаж
+            # Получаем АКТУАЛЬНУЮ цену с WB API (цены постоянно меняются!)
+            current_price_wb = get_current_wb_price(int(nm_id_str))
+            
+            # Если не удалось получить с WB - используем цену из базы (Срезы цен)
+            final_price = current_price_wb if current_price_wb else info['price']
+            
+            # Получаем статистику продаж (для сортировки по популярности)
             sales_data = get_wb_sales_history(int(nm_id_str), days=7)
             total_sales = sum(d['sales'] for d in sales_data)
-            avg_price = statistics.mean([d['price'] for d in sales_data]) if sales_data else info['price']
             
             competitors.append({
                 'nm_id': int(nm_id_str),
-                'name': info.get('name', 'Неизвестно'),
+                'name': info.get('name', f'Товар {nm_id_str}'),  # Показываем артикул если нет имени
                 'category': info['category'],
-                'price': round(avg_price, 2),
+                'price': round(final_price, 2),  # АКТУАЛЬНАЯ цена с WB
                 'sales_7d': total_sales,
-                'revenue_7d': round(avg_price * total_sales, 2)
+                'revenue_7d': round(final_price * total_sales, 2)
             })
     
     competitors.sort(key=lambda x: x['sales_7d'], reverse=True)
@@ -592,7 +635,11 @@ async def full_analysis(
     
     category = product_info['category']
     product_type = product_info['product_type']
-    current_price = product_info['price']
+    
+    # Получаем АКТУАЛЬНУЮ цену с WB API
+    current_price_wb = get_current_wb_price(nm_id)
+    current_price = current_price_wb if current_price_wb else product_info['price']
+    
     cost = current_price * 0.7
     
     # Получаем историю продаж
