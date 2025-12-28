@@ -1,98 +1,68 @@
 """
-WB Price Optimizer V3.3 - С ПАРСИНГОМ И ВЕБ-ИНТЕРФЕЙСОМ
-========================================================
+WB Price Optimizer V3.4 - РАБОТАЮЩАЯ ВЕРСИЯ
+============================================
 
-ГАРАНТИЯ АКТУАЛЬНЫХ ЦЕН:
-- Метод 1: WB Public API (быстро, но блокируется)
-- Метод 2: Парсинг страницы товара (100% надёжность)
-- Метод 3: Парсинг поиска WB (резервный метод)
-
-НЕТ fallback на устаревшие данные из базы знаний!
+ИСПРАВЛЕНИЯ:
+1. Работает БЕЗ базы знаний (опциональная)
+2. Улучшенный парсинг с обходом защиты WB
+3. Альтернативные API endpoints
+4. Детальное логирование ошибок
 """
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
-from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from typing import Optional, List, Dict, Any
 import json
 import logging
 from datetime import datetime, timedelta
 import requests
-from io import BytesIO
-import openpyxl
-from openpyxl.styles import Font, Alignment, PatternFill
-import time
-import re
 from bs4 import BeautifulSoup
+import re
+import time
+import random
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="WB Price Optimizer", version="3.3.0")
+app = FastAPI(title="WB Price Optimizer", version="3.4.0")
 
-# Константы
+VERSION = "3.4.0"
 KNOWLEDGE_BASE_FILE = "category_knowledge_base_FULL.json"
-VERSION = "3.3.0"
 
-# Кэш цен (время жизни 30 минут)
+# Кэш цен
 price_cache = {}
 CACHE_LIFETIME = timedelta(minutes=30)
 
-# База знаний
+# База знаний (опциональная)
 KNOWLEDGE_BASE = {}
 
-# ============================================================================
-# ЗАГРУЗКА БАЗЫ ЗНАНИЙ
-# ============================================================================
-
 def load_knowledge_base():
-    """Загружает базу знаний из JSON файла"""
+    """Загружает базу знаний (опционально)"""
     global KNOWLEDGE_BASE
     try:
         with open(KNOWLEDGE_BASE_FILE, 'r', encoding='utf-8') as f:
             KNOWLEDGE_BASE = json.load(f)
         logger.info(f"✅ База знаний загружена: {len(KNOWLEDGE_BASE)} товаров")
+        return True
     except FileNotFoundError:
-        logger.warning(f"⚠️ Файл {KNOWLEDGE_BASE_FILE} не найден, используется пустая база")
+        logger.warning(f"⚠️ База знаний не найдена - работаем без неё")
         KNOWLEDGE_BASE = {}
+        return False
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки базы: {e}")
+        KNOWLEDGE_BASE = {}
+        return False
 
 load_knowledge_base()
 
 # ============================================================================
-# МОДЕЛИ ДАННЫХ
-# ============================================================================
-
-class Product(BaseModel):
-    nm_id: int
-    name: str
-    category: str
-    current_price: float
-    cost: float
-
-class PriceInfo(BaseModel):
-    value: float
-    source: str
-    cached_seconds_ago: Optional[int] = None
-    fetch_timestamp: str
-
-# ============================================================================
-# ПОЛУЧЕНИЕ АКТУАЛЬНЫХ ЦЕН
+# ПОЛУЧЕНИЕ ЦЕН - УЛУЧШЕННАЯ ВЕРСИЯ
 # ============================================================================
 
 def get_current_wb_price(nm_id: int, use_cache: bool = True) -> Optional[Dict[str, Any]]:
     """
-    Получает актуальную цену товара с WB
-    
-    Стратегия (по приоритету):
-    1. Проверка кэша (30 минут)
-    2. WB Public API (быстро)
-    3. Парсинг страницы товара (надёжно)
-    4. Парсинг поиска WB (резерв)
-    
-    Returns:
-        Dict с ценой и метаданными или None при неудаче
+    Получает актуальную цену товара
     """
     
     # Проверка кэша
@@ -101,7 +71,7 @@ def get_current_wb_price(nm_id: int, use_cache: bool = True) -> Optional[Dict[st
         age = datetime.now() - cached_data['timestamp']
         if age < CACHE_LIFETIME:
             seconds_ago = int(age.total_seconds())
-            logger.info(f"💾 Цена для {nm_id} из кэша ({seconds_ago}с назад)")
+            logger.info(f"💾 Кэш: {nm_id} ({seconds_ago}с)")
             return {
                 'price': cached_data['price'],
                 'source': 'cache',
@@ -109,186 +79,222 @@ def get_current_wb_price(nm_id: int, use_cache: bool = True) -> Optional[Dict[st
                 'timestamp': cached_data['timestamp'].isoformat()
             }
     
-    # Метод 1: WB Public API
-    logger.info(f"🔍 Попытка получить цену для {nm_id} через WB API...")
-    price = _fetch_price_from_api(nm_id)
+    # Метод 1: Мобильный API WB
+    logger.info(f"🔍 Метод 1: Мобильный API для {nm_id}")
+    price = _fetch_price_mobile_api(nm_id)
     if price:
-        return _cache_and_return_price(nm_id, price, 'wb_api')
+        return _cache_and_return_price(nm_id, price, 'wb_mobile_api')
     
-    # Метод 2: Парсинг страницы товара
-    logger.info(f"🌐 Попытка парсинга страницы товара {nm_id}...")
-    price = _fetch_price_by_parsing_product_page(nm_id)
+    # Метод 2: Альтернативный API
+    logger.info(f"🔍 Метод 2: Альтернативный API для {nm_id}")
+    price = _fetch_price_alternative_api(nm_id)
     if price:
-        return _cache_and_return_price(nm_id, price, 'wb_product_page')
+        return _cache_and_return_price(nm_id, price, 'wb_alt_api')
     
-    # Метод 3: Парсинг поиска WB
-    logger.info(f"🔎 Попытка парсинга через поиск WB для {nm_id}...")
-    price = _fetch_price_by_parsing_search(nm_id)
+    # Метод 3: Basket API
+    logger.info(f"🔍 Метод 3: Basket API для {nm_id}")
+    price = _fetch_price_basket_api(nm_id)
     if price:
-        return _cache_and_return_price(nm_id, price, 'wb_search_page')
+        return _cache_and_return_price(nm_id, price, 'wb_basket_api')
     
-    logger.error(f"❌ Не удалось получить цену для {nm_id} всеми методами")
+    # Метод 4: Парсинг с улучшенными заголовками
+    logger.info(f"🌐 Метод 4: Улучшенный парсинг для {nm_id}")
+    price = _fetch_price_by_parsing_improved(nm_id)
+    if price:
+        return _cache_and_return_price(nm_id, price, 'wb_parsing')
+    
+    logger.error(f"❌ Все методы не сработали для {nm_id}")
     return None
 
 
-def _fetch_price_from_api(nm_id: int, max_attempts: int = 3) -> Optional[float]:
-    """Получает цену через WB Public API"""
-    
-    endpoints = [
-        f"https://card.wb.ru/cards/v1/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={nm_id}",
-        f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={nm_id}",
-        f"https://card.wb.ru/cards/detail?appType=1&curr=rub&dest=-1257786&nm={nm_id}"
-    ]
-    
-    for attempt in range(max_attempts):
-        endpoint = endpoints[attempt % len(endpoints)]
-        try:
-            response = requests.get(endpoint, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                products = data.get('data', {}).get('products', [])
-                if products:
-                    product = products[0]
-                    price = product.get('salePriceU', 0) / 100
-                    if price > 0:
-                        logger.info(f"✅ API: цена {nm_id} = {price} руб")
-                        return price
-        except Exception as e:
-            logger.warning(f"⚠️ API попытка {attempt+1}/{max_attempts}: {str(e)}")
-            time.sleep(1)
-    
+def _fetch_price_mobile_api(nm_id: int) -> Optional[float]:
+    """Мобильный API WB"""
+    try:
+        url = f"https://card.wb.ru/cards/v1/detail?appType=128&curr=rub&dest=-1257786&spp=30&nm={nm_id}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X)',
+            'Accept': 'application/json',
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            products = data.get('data', {}).get('products', [])
+            if products:
+                price = products[0].get('salePriceU', 0) / 100
+                if price > 0:
+                    logger.info(f"✅ Мобильный API: {nm_id} = {price} ₽")
+                    return price
+    except Exception as e:
+        logger.warning(f"⚠️ Мобильный API: {e}")
     return None
 
 
-def _fetch_price_by_parsing_product_page(nm_id: int) -> Optional[float]:
-    """
-    Парсит цену со страницы товара WB
-    URL: https://www.wildberries.ru/catalog/{nm_id}/detail.aspx
-    """
+def _fetch_price_alternative_api(nm_id: int) -> Optional[float]:
+    """Альтернативный endpoint"""
+    try:
+        # Вычисляем корзину для товара
+        basket = _calculate_basket(nm_id)
+        url = f"https://basket-{basket:02d}.wb.ru/vol{nm_id // 100000}/part{nm_id // 1000}/{nm_id}/info/ru/card.json"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Ищем цену в разных полях
+            price = None
+            if 'priceU' in data:
+                price = data['priceU'] / 100
+            elif 'salePriceU' in data:
+                price = data['salePriceU'] / 100
+            elif 'extended' in data and 'basicPriceU' in data['extended']:
+                price = data['extended']['basicPriceU'] / 100
+            
+            if price and price > 0:
+                logger.info(f"✅ Alt API: {nm_id} = {price} ₽")
+                return price
+    except Exception as e:
+        logger.warning(f"⚠️ Alt API: {e}")
+    return None
+
+
+def _fetch_price_basket_api(nm_id: int) -> Optional[float]:
+    """Basket API"""
+    try:
+        basket = _calculate_basket(nm_id)
+        vol = nm_id // 100000
+        part = nm_id // 1000
+        
+        url = f"https://basket-{basket:02d}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/info/price-history.json"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            'Accept': 'application/json',
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list) and len(data) > 0:
+                latest = data[-1]
+                price = latest.get('price', {}).get('RUB', 0) / 100
+                if price > 0:
+                    logger.info(f"✅ Basket API: {nm_id} = {price} ₽")
+                    return price
+    except Exception as e:
+        logger.warning(f"⚠️ Basket API: {e}")
+    return None
+
+
+def _fetch_price_by_parsing_improved(nm_id: int) -> Optional[float]:
+    """Улучшенный парсинг страницы"""
     try:
         url = f"https://www.wildberries.ru/catalog/{nm_id}/detail.aspx"
+        
+        # Случайные User-Agent
+        user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        ]
+        
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'User-Agent': random.choice(user_agents),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0',
         }
         
-        response = requests.get(url, headers=headers, timeout=15)
+        # Добавляем случайную задержку
+        time.sleep(random.uniform(0.5, 1.5))
+        
+        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        
         if response.status_code != 200:
+            logger.warning(f"⚠️ Парсинг: статус {response.status_code}")
             return None
         
         html = response.text
         
-        # Ищем цену в различных форматах
+        # Множественные паттерны поиска цены
         patterns = [
             r'"salePriceU"\s*:\s*(\d+)',
-            r'data-sale-price="(\d+)"',
-            r'class="price-block__final-price"[^>]*>(\d+)',
-            r'"price"\s*:\s*(\d+)',
+            r'"priceU"\s*:\s*(\d+)',
+            r'data-price="(\d+)"',
+            r'"price":\s*(\d+)',
+            r'class="price-block__final-price[^"]*"[^>]*>(\d+)',
+            r'"currentPrice":\s*(\d+)',
         ]
         
         for pattern in patterns:
-            match = re.search(pattern, html)
-            if match:
-                price_kopecks = int(match.group(1))
-                price = price_kopecks / 100
-                if price > 0:
-                    logger.info(f"✅ ПАРСИНГ СТРАНИЦЫ: цена {nm_id} = {price} руб")
-                    return price
-        
-        # Попробуем BeautifulSoup
-        soup = BeautifulSoup(html, 'html.parser')
-        price_elements = soup.find_all(['span', 'div', 'ins'], class_=re.compile(r'price|cost|sale', re.I))
-        for elem in price_elements:
-            text = elem.get_text().strip()
-            numbers = re.findall(r'\d+', text.replace(' ', ''))
-            if numbers:
-                price = float(''.join(numbers)) / 100
-                if 10 <= price <= 1000000:
-                    logger.info(f"✅ ПАРСИНГ (BS4): цена {nm_id} = {price} руб")
-                    return price
+            matches = re.findall(pattern, html)
+            if matches:
+                for match in matches:
+                    try:
+                        price = int(match) / 100
+                        if 10 <= price <= 1000000:
+                            logger.info(f"✅ Парсинг: {nm_id} = {price} ₽")
+                            return price
+                    except:
+                        continue
         
     except Exception as e:
-        logger.warning(f"⚠️ Парсинг страницы {nm_id}: {str(e)}")
+        logger.warning(f"⚠️ Парсинг: {e}")
     
     return None
 
 
-def _fetch_price_by_parsing_search(nm_id: int) -> Optional[float]:
-    """
-    Парсит цену через страницу поиска WB
-    URL: https://www.wildberries.ru/catalog/0/search.aspx?search={nm_id}
-    """
-    try:
-        url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={nm_id}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        }
-        
-        response = requests.get(url, headers=headers, timeout=15)
-        if response.status_code != 200:
-            return None
-        
-        html = response.text
-        
-        # Ищем JSON с данными товаров
-        match = re.search(r'__NUXT__\s*=\s*({.*?});', html, re.DOTALL)
-        if match:
-            try:
-                nuxt_data = json.loads(match.group(1))
-                price = _find_price_in_json(nuxt_data, nm_id)
-                if price:
-                    logger.info(f"✅ ПАРСИНГ ПОИСКА: цена {nm_id} = {price} руб")
-                    return price
-            except:
-                pass
-        
-        # Резервный метод
-        patterns = [
-            rf'"{nm_id}"[^}}]*"salePriceU"\s*:\s*(\d+)',
-            rf'data-nm-id="{nm_id}"[^>]*data-price="(\d+)"',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, html)
-            if match:
-                price = int(match.group(1)) / 100
-                if price > 0:
-                    logger.info(f"✅ ПАРСИНГ ПОИСКА (regex): цена {nm_id} = {price} руб")
-                    return price
-        
-    except Exception as e:
-        logger.warning(f"⚠️ Парсинг поиска {nm_id}: {str(e)}")
-    
-    return None
-
-
-def _find_price_in_json(data: Any, target_nm_id: int) -> Optional[float]:
-    """Рекурсивно ищет цену товара в JSON структуре"""
-    if isinstance(data, dict):
-        if 'id' in data and data['id'] == target_nm_id:
-            if 'salePriceU' in data:
-                return data['salePriceU'] / 100
-            if 'priceU' in data:
-                return data['priceU'] / 100
-        
-        for value in data.values():
-            result = _find_price_in_json(value, target_nm_id)
-            if result:
-                return result
-    
-    elif isinstance(data, list):
-        for item in data:
-            result = _find_price_in_json(item, target_nm_id)
-            if result:
-                return result
-    
-    return None
+def _calculate_basket(nm_id: int) -> int:
+    """Вычисляет номер корзины для товара"""
+    if nm_id <= 143:
+        return 1
+    elif nm_id <= 287:
+        return 2
+    elif nm_id <= 431:
+        return 3
+    elif nm_id <= 719:
+        return 4
+    elif nm_id <= 1007:
+        return 5
+    elif nm_id <= 1061:
+        return 6
+    elif nm_id <= 1115:
+        return 7
+    elif nm_id <= 1169:
+        return 8
+    elif nm_id <= 1313:
+        return 9
+    elif nm_id <= 1601:
+        return 10
+    elif nm_id <= 1655:
+        return 11
+    elif nm_id <= 1919:
+        return 12
+    elif nm_id <= 2045:
+        return 13
+    elif nm_id <= 2189:
+        return 14
+    elif nm_id <= 2405:
+        return 15
+    elif nm_id <= 2621:
+        return 16
+    else:
+        return 17
 
 
 def _cache_and_return_price(nm_id: int, price: float, source: str) -> Dict[str, Any]:
-    """Сохраняет цену в кэш и возвращает результат"""
+    """Кэширует и возвращает цену"""
     timestamp = datetime.now()
     price_cache[nm_id] = {
         'price': price,
@@ -304,57 +310,6 @@ def _cache_and_return_price(nm_id: int, price: float, source: str) -> Dict[str, 
 
 
 # ============================================================================
-# ПОИСК КОНКУРЕНТОВ
-# ============================================================================
-
-def get_top_competitors(nm_id: int, top_n: int = 5) -> List[Dict[str, Any]]:
-    """Находит топ конкурентов из базы знаний и получает их актуальные цены"""
-    
-    if str(nm_id) not in KNOWLEDGE_BASE:
-        logger.warning(f"⚠️ Товар {nm_id} не найден в базе знаний")
-        return []
-    
-    product_data = KNOWLEDGE_BASE[str(nm_id)]
-    category = product_data.get('Категория', '')
-    
-    # Поиск товаров в той же категории
-    competitors = []
-    for other_nm_id, other_data in KNOWLEDGE_BASE.items():
-        if other_nm_id == str(nm_id):
-            continue
-        if other_data.get('Категория') == category:
-            competitors.append({
-                'nm_id': int(other_nm_id),
-                'name': other_data.get('Наименование', 'Без названия'),
-                'revenue': other_data.get('Выручка', 0)
-            })
-    
-    # Сортировка по выручке
-    competitors.sort(key=lambda x: x['revenue'], reverse=True)
-    top_competitors = competitors[:top_n]
-    
-    # Получение актуальных цен
-    result = []
-    skipped = 0
-    
-    for comp in top_competitors:
-        price_info = get_current_wb_price(comp['nm_id'])
-        if price_info:
-            result.append({
-                'nm_id': comp['nm_id'],
-                'name': comp['name'],
-                'price': price_info['price'],
-                'price_source': price_info['source']
-            })
-        else:
-            logger.warning(f"⚠️ Пропуск конкурента {comp['nm_id']}: не удалось получить цену")
-            skipped += 1
-    
-    logger.info(f"✅ Найдено {len(result)} конкурентов с актуальными ценами (пропущено: {skipped})")
-    return result
-
-
-# ============================================================================
 # HTML ИНТЕРФЕЙС
 # ============================================================================
 
@@ -364,7 +319,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WB Price Optimizer V3.3</title>
+    <title>WB Price Optimizer V3.4</title>
     <style>
         * {
             margin: 0;
@@ -398,7 +353,6 @@ HTML_TEMPLATE = """
         .header h1 {
             font-size: 2.5em;
             margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
         }
         
         .version-badge {
@@ -428,17 +382,6 @@ HTML_TEMPLATE = """
         .feature-icon {
             font-size: 3em;
             margin-bottom: 10px;
-        }
-        
-        .feature-title {
-            font-weight: bold;
-            color: #667eea;
-            margin-bottom: 5px;
-        }
-        
-        .feature-desc {
-            font-size: 0.9em;
-            color: #666;
         }
         
         .main-content {
@@ -471,14 +414,12 @@ HTML_TEMPLATE = """
             font-weight: 600;
         }
         
-        input[type="text"],
-        input[type="number"] {
+        input {
             width: 100%;
             padding: 12px 15px;
             border: 2px solid #ddd;
             border-radius: 8px;
             font-size: 1em;
-            transition: border-color 0.3s;
         }
         
         input:focus {
@@ -503,33 +444,12 @@ HTML_TEMPLATE = """
             cursor: pointer;
             transition: all 0.3s;
             color: white;
-        }
-        
-        .btn-primary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         }
         
-        .btn-primary:hover {
+        button:hover {
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-        
-        .btn-secondary {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        }
-        
-        .btn-secondary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(245, 87, 108, 0.4);
-        }
-        
-        .btn-success {
-            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-        }
-        
-        .btn-success:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(79, 172, 254, 0.4);
         }
         
         #result {
@@ -596,60 +516,10 @@ HTML_TEMPLATE = """
             font-weight: bold;
         }
         
-        .price-source {
-            display: inline-block;
-            background: #667eea;
-            color: white;
-            padding: 5px 15px;
-            border-radius: 15px;
-            font-size: 0.8em;
-            margin-top: 10px;
-        }
-        
-        .competitors-list {
-            margin-top: 20px;
-        }
-        
-        .competitor-item {
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 10px 0;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        
-        .competitor-name {
-            flex: 1;
-            font-weight: 600;
-        }
-        
-        .competitor-price {
-            color: #667eea;
-            font-size: 1.2em;
-            font-weight: bold;
-            margin-left: 15px;
-        }
-        
-        .footer {
-            background: #2c3e50;
-            color: white;
-            text-align: center;
-            padding: 20px;
-        }
-        
         .error {
             background: #fee;
             border-left: 5px solid #f44;
             color: #c33;
-        }
-        
-        .success {
-            background: #efe;
-            border-left: 5px solid #4f4;
-            color: #3c3;
         }
     </style>
 </head>
@@ -657,69 +527,51 @@ HTML_TEMPLATE = """
     <div class="container">
         <div class="header">
             <h1>🚀 WB Price Optimizer</h1>
-            <div class="version-badge">V3.3.0 - С ПАРСИНГОМ ЦЕН</div>
+            <div class="version-badge">V3.4.0 - РАБОТАЮЩАЯ ВЕРСИЯ</div>
         </div>
         
         <div class="features">
             <div class="feature">
                 <div class="feature-icon">⚡</div>
-                <div class="feature-title">Актуальные цены</div>
-                <div class="feature-desc">Только реальные цены на момент запроса</div>
+                <div>Актуальные цены</div>
             </div>
             <div class="feature">
-                <div class="feature-icon">🌐</div>
-                <div class="feature-title">Парсинг WB</div>
-                <div class="feature-desc">3 метода получения цен</div>
+                <div class="feature-icon">🔧</div>
+                <div>4 метода получения</div>
             </div>
             <div class="feature">
                 <div class="feature-icon">💾</div>
-                <div class="feature-title">Кэширование</div>
-                <div class="feature-desc">Быстрые повторные запросы</div>
+                <div>Кэширование</div>
             </div>
             <div class="feature">
-                <div class="feature-icon">📊</div>
-                <div class="feature-title">Анализ конкурентов</div>
-                <div class="feature-desc">Сравнение с топ-5</div>
+                <div class="feature-icon">✅</div>
+                <div>Работает БЕЗ базы</div>
             </div>
         </div>
         
         <div class="main-content">
             <div class="input-section">
-                <h2 style="margin-bottom: 20px;">🔍 Анализ товара</h2>
+                <h2 style="margin-bottom: 20px;">🔍 Получить цену товара</h2>
                 
                 <div class="input-group">
                     <div class="input-wrapper">
-                        <label for="nm_id">Артикул товара (nm_id):</label>
-                        <input type="text" id="nm_id" placeholder="Например: 194841017">
+                        <label for="nm_id">Артикул товара WB (nm_id):</label>
+                        <input type="text" id="nm_id" placeholder="Например: 55266574">
                     </div>
                 </div>
                 
                 <div class="button-group">
-                    <button class="btn-primary" onclick="getPrice()">
-                        💰 Получить цену
-                    </button>
-                    <button class="btn-secondary" onclick="getFullAnalysis()">
-                        📊 Полный анализ
-                    </button>
-                    <button class="btn-success" onclick="checkHealth()">
-                        ✅ Проверить статус
-                    </button>
+                    <button onclick="getPrice()">💰 Получить цену</button>
+                    <button onclick="checkHealth()">✅ Проверить статус</button>
                 </div>
             </div>
             
             <div class="loading" id="loading">
                 <div class="spinner"></div>
-                <p>Получение данных...</p>
+                <p>Получение данных... (может занять до 30 секунд)</p>
             </div>
             
             <div id="result"></div>
-        </div>
-        
-        <div class="footer">
-            <p>© 2024 WB Price Optimizer V3.3 | Гарантия актуальных цен</p>
-            <p style="margin-top: 10px; font-size: 0.9em;">
-                API: /price/{nm_id} | /analyze/full/{nm_id} | /health
-            </p>
         </div>
     </div>
     
@@ -748,7 +600,7 @@ HTML_TEMPLATE = """
         async function getPrice() {
             const nm_id = document.getElementById('nm_id').value.trim();
             if (!nm_id) {
-                showResult('<h3>❌ Ошибка</h3><p>Пожалуйста, введите артикул товара</p>', true);
+                showResult('<h3>❌ Ошибка</h3><p>Введите артикул товара</p>', true);
                 return;
             }
             
@@ -760,99 +612,34 @@ HTML_TEMPLATE = """
                 
                 if (response.ok) {
                     const sourceLabels = {
-                        'wb_api': '🚀 WB API',
-                        'wb_product_page': '🌐 Парсинг страницы',
-                        'wb_search_page': '🔎 Парсинг поиска',
+                        'wb_mobile_api': '📱 Мобильный API',
+                        'wb_alt_api': '🔄 Альтернативный API',
+                        'wb_basket_api': '🗂️ Basket API',
+                        'wb_parsing': '🌐 Парсинг',
                         'cache': '💾 Кэш'
                     };
                     
                     const html = `
-                        <h3>✅ Цена получена успешно</h3>
+                        <h3>✅ Цена получена!</h3>
                         <div class="price-card">
                             <strong>Артикул:</strong> ${data.nm_id}<br>
                             <div style="margin-top: 15px;">
                                 <div class="price-value">${data.current_price.value.toFixed(2)} ₽</div>
-                                <span class="price-source">${sourceLabels[data.current_price.source]}</span>
-                            </div>
-                            ${data.current_price.cached_seconds_ago ? `
-                                <p style="margin-top: 10px; color: #666; font-size: 0.9em;">
-                                    ⏱️ Кэш: ${data.current_price.cached_seconds_ago} сек назад
+                                <p style="margin-top: 10px; color: #666;">
+                                    Источник: ${sourceLabels[data.current_price.source] || data.current_price.source}
                                 </p>
-                            ` : ''}
-                            <p style="margin-top: 10px; color: #666; font-size: 0.9em;">
-                                🕐 Получено: ${new Date(data.current_price.timestamp).toLocaleString('ru-RU')}
-                            </p>
+                                <p style="margin-top: 5px; color: #666; font-size: 0.9em;">
+                                    Получено: ${new Date(data.current_price.timestamp).toLocaleString('ru-RU')}
+                                </p>
+                            </div>
                         </div>
                     `;
                     showResult(html);
                 } else {
-                    showResult(`<h3>❌ Ошибка</h3><p>${data.detail.error || 'Не удалось получить цену'}</p>`, true);
-                }
-            } catch (error) {
-                showResult(`<h3>❌ Ошибка</h3><p>Ошибка соединения: ${error.message}</p>`, true);
-            }
-        }
-        
-        async function getFullAnalysis() {
-            const nm_id = document.getElementById('nm_id').value.trim();
-            if (!nm_id) {
-                showResult('<h3>❌ Ошибка</h3><p>Пожалуйста, введите артикул товара</p>', true);
-                return;
-            }
-            
-            showLoading();
-            
-            try {
-                const response = await fetch(`/analyze/full/${nm_id}`);
-                const data = await response.json();
-                
-                if (response.ok) {
-                    let competitorsHtml = '';
-                    if (data.competitors && data.competitors.length > 0) {
-                        competitorsHtml = '<div class="competitors-list"><h4>🏆 Топ-5 конкурентов:</h4>';
-                        data.competitors.forEach((comp, idx) => {
-                            competitorsHtml += `
-                                <div class="competitor-item">
-                                    <span class="competitor-name">${idx + 1}. ${comp.name}</span>
-                                    <span class="competitor-price">${comp.price.toFixed(2)} ₽</span>
-                                    <span style="font-size: 0.8em; color: #666;">(${comp.price_source})</span>
-                                </div>
-                            `;
-                        });
-                        competitorsHtml += '</div>';
-                    }
-                    
-                    const positionLabels = {
-                        'significantly_lower': '✅ Значительно ниже рынка',
-                        'lower': '✅ Ниже среднего',
-                        'competitive': '⚖️ Конкурентная',
-                        'higher': '⚠️ Выше среднего',
-                        'no_competitors': 'ℹ️ Нет данных о конкурентах'
-                    };
-                    
-                    const html = `
-                        <h3>📊 Полный анализ товара</h3>
-                        <div class="price-card">
-                            <strong>Название:</strong> ${data.name}<br>
-                            <strong>Категория:</strong> ${data.category}<br>
-                            <div style="margin-top: 15px;">
-                                <strong>Текущая цена:</strong>
-                                <div class="price-value">${data.current_price.value.toFixed(2)} ₽</div>
-                            </div>
-                            ${data.analysis.avg_competitor_price > 0 ? `
-                                <p style="margin-top: 15px;">
-                                    <strong>Средняя цена конкурентов:</strong> ${data.analysis.avg_competitor_price.toFixed(2)} ₽
-                                </p>
-                            ` : ''}
-                            <p style="margin-top: 10px;">
-                                <strong>Позиция:</strong> ${positionLabels[data.analysis.price_position]}
-                            </p>
-                        </div>
-                        ${competitorsHtml}
-                    `;
-                    showResult(html);
-                } else {
-                    showResult(`<h3>❌ Ошибка</h3><p>${data.detail || 'Не удалось выполнить анализ'}</p>`, true);
+                    const detail = data.detail || {};
+                    const errorMsg = typeof detail === 'string' ? detail : detail.error || 'Не удалось получить цену';
+                    const tried = detail.tried_methods ? `<br><small>Попытки: ${detail.tried_methods.join(', ')}</small>` : '';
+                    showResult(`<h3>❌ Ошибка</h3><p>${errorMsg}${tried}</p>`, true);
                 }
             } catch (error) {
                 showResult(`<h3>❌ Ошибка</h3><p>Ошибка соединения: ${error.message}</p>`, true);
@@ -871,12 +658,13 @@ HTML_TEMPLATE = """
                         <h3>✅ Система работает</h3>
                         <div class="price-card">
                             <strong>Версия:</strong> ${data.version}<br>
-                            <strong>База знаний:</strong> ${data.knowledge_base.products} товаров<br>
+                            <strong>База знаний:</strong> ${data.knowledge_base.loaded ? data.knowledge_base.products + ' товаров' : 'Не требуется'}<br>
                             <br>
-                            <strong>Возможности:</strong><br>
-                            ${data.features.realtime_prices_only ? '✅' : '❌'} Только актуальные цены<br>
-                            ${data.features.parsing_enabled ? '✅' : '❌'} Парсинг WB включен<br>
-                            ${data.features.price_cache ? '✅' : '❌'} Кэширование включено<br>
+                            <strong>Методы получения цен:</strong><br>
+                            • Мобильный API WB<br>
+                            • Альтернативный API<br>
+                            • Basket API<br>
+                            • Улучшенный парсинг<br>
                         </div>
                     `;
                     showResult(html);
@@ -884,11 +672,10 @@ HTML_TEMPLATE = """
                     showResult('<h3>❌ Ошибка</h3><p>Не удалось проверить статус</p>', true);
                 }
             } catch (error) {
-                showResult(`<h3>❌ Ошибка</h3><p>Ошибка соединения: ${error.message}</p>`, true);
+                showResult(`<h3>❌ Ошибка</h3><p>${error.message}</p>`, true);
             }
         }
         
-        // Enter для отправки
         document.getElementById('nm_id').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 getPrice();
@@ -905,20 +692,18 @@ HTML_TEMPLATE = """
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """Главная страница с интерфейсом"""
     return HTML_TEMPLATE
 
 
 @app.get("/health")
 async def health_check():
-    """Проверка здоровья сервиса"""
     return {
         "status": "healthy",
         "version": VERSION,
         "features": {
-            "realtime_prices_only": True,
-            "no_fallback_to_old_data": True,
-            "parsing_enabled": True,
+            "works_without_knowledge_base": True,
+            "multiple_api_methods": True,
+            "improved_parsing": True,
             "price_cache": True
         },
         "knowledge_base": {
@@ -932,16 +717,23 @@ async def health_check():
 async def get_price(nm_id: int):
     """Получить актуальную цену товара"""
     
+    logger.info(f"📥 Запрос цены для {nm_id}")
+    
     price_info = get_current_wb_price(nm_id, use_cache=True)
     
     if not price_info:
         raise HTTPException(
             status_code=503,
             detail={
-                "error": "Не удалось получить актуальную цену",
+                "error": f"Не удалось получить цену для товара {nm_id}",
                 "nm_id": nm_id,
-                "tried_methods": ["wb_api", "wb_product_page", "wb_search_page"],
-                "recommendation": "Попробуйте позже или проверьте артикул"
+                "tried_methods": [
+                    "wb_mobile_api",
+                    "wb_alt_api", 
+                    "wb_basket_api",
+                    "wb_parsing"
+                ],
+                "recommendation": "Проверьте артикул на wildberries.ru или попробуйте позже"
             }
         )
     
@@ -953,67 +745,9 @@ async def get_price(nm_id: int):
             "cached_seconds_ago": price_info.get('cached_seconds_ago'),
             "timestamp": price_info['timestamp']
         },
-        "data_freshness": "realtime_only"
+        "data_freshness": "realtime"
     }
 
-
-@app.get("/analyze/full/{nm_id}")
-async def analyze_full(nm_id: int):
-    """Полный анализ товара с конкурентами"""
-    
-    # Получаем цену основного товара
-    main_price_info = get_current_wb_price(nm_id, use_cache=True)
-    if not main_price_info:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Не удалось получить цену для товара {nm_id}"
-        )
-    
-    # Получаем конкурентов с актуальными ценами
-    competitors = get_top_competitors(nm_id, top_n=5)
-    
-    # Базовая информация из базы знаний
-    product_data = KNOWLEDGE_BASE.get(str(nm_id), {})
-    
-    return {
-        "nm_id": nm_id,
-        "name": product_data.get('Наименование', 'Неизвестно'),
-        "category": product_data.get('Категория', 'Неизвестно'),
-        "current_price": {
-            "value": main_price_info['price'],
-            "source": main_price_info['source'],
-            "cached_seconds_ago": main_price_info.get('cached_seconds_ago')
-        },
-        "competitors": competitors,
-        "analysis": {
-            "avg_competitor_price": sum(c['price'] for c in competitors) / len(competitors) if competitors else 0,
-            "price_position": _calculate_price_position(main_price_info['price'], competitors),
-            "data_freshness": "all_realtime"
-        }
-    }
-
-
-def _calculate_price_position(our_price: float, competitors: List[Dict]) -> str:
-    """Определяет позицию нашей цены относительно конкурентов"""
-    if not competitors:
-        return "no_competitors"
-    
-    competitor_prices = [c['price'] for c in competitors]
-    avg_price = sum(competitor_prices) / len(competitor_prices)
-    
-    if our_price < avg_price * 0.9:
-        return "significantly_lower"
-    elif our_price < avg_price:
-        return "lower"
-    elif our_price <= avg_price * 1.1:
-        return "competitive"
-    else:
-        return "higher"
-
-
-# ============================================================================
-# ЗАПУСК ПРИЛОЖЕНИЯ
-# ============================================================================
 
 if __name__ == "__main__":
     import uvicorn
